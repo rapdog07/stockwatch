@@ -8,23 +8,69 @@ technical indicators and analytics.
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
+import time
 from datetime import datetime, timedelta
+
+
+def _get_yf_session():
+    """Create a requests session with browser-like headers so Yahoo Finance
+    doesn't block us — especially important on cloud platforms like Render."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+    })
+    return session
 
 
 class StockAnalyzer:
     """Fetches and analyzes stock data using yfinance."""
 
+    # Shared session so yfinance reuses the connection
+    _session = None
+
+    @classmethod
+    def _get_ticker(cls, ticker: str) -> yf.Ticker:
+        """Get a yfinance Ticker with our custom session."""
+        if cls._session is None:
+            cls._session = _get_yf_session()
+        return yf.Ticker(ticker, session=cls._session)
+
     @staticmethod
     def get_stock_info(ticker: str) -> dict | None:
         """Fetch basic stock info and key metrics."""
         try:
-            stock = yf.Ticker(ticker)
+            stock = StockAnalyzer._get_ticker(ticker)
             info = stock.info
 
-            if not info or ("regularMarketPrice" not in info and "currentPrice" not in info):
+            if not info or not isinstance(info, dict):
+                print(f"[WARN] Empty or invalid info dict for {ticker}")
                 return None
 
-            price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+            # Try multiple price keys — some work via different endpoints
+            price = (
+                info.get("currentPrice")
+                or info.get("regularMarketPrice")
+                or info.get("regularMarketOpen")
+            )
+            if not price or price == 0:
+                # Fallback: try to get price from fast_info (more reliable)
+                try:
+                    price = stock.fast_info.get("lastPrice") or stock.fast_info.get("regularMarketPreviousClose")
+                except Exception:
+                    pass
+
+            if not price or price == 0:
+                print(f"[WARN] No price found for {ticker}. Info keys: {list(info.keys())[:20]}")
+                return None
+
             prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose") or price
             change = price - prev_close
             change_pct = (change / prev_close * 100) if prev_close else 0
@@ -56,23 +102,35 @@ class StockAnalyzer:
                 "description": info.get("longBusinessSummary", ""),
             }
         except Exception as e:
-            print(f"Error fetching stock info for {ticker}: {e}")
+            print(f"[ERROR] Fetching stock info for {ticker}: {type(e).__name__}: {e}")
             return None
 
     @staticmethod
     def get_historical_data(ticker: str, period: str = "1y", interval: str = "1d") -> list[dict] | None:
-        """Fetch historical price data."""
+        """Fetch historical price data using yf.download (more reliable on cloud)."""
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period=period, interval=interval)
+            # Ensure the session is initialized with browser headers
+            StockAnalyzer._get_ticker(ticker)
+            # Use yf.download — it hits a different Yahoo endpoint that's
+            # more reliable behind proxies / cloud hosting
+            df = yf.download(
+                ticker,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+                session=StockAnalyzer._session,
+            )
 
-            if hist.empty:
+            if df is None or df.empty:
+                print(f"[WARN] No historical data for {ticker} (period={period})")
                 return None
 
             results = []
-            for idx, row in hist.iterrows():
+            for idx, row in df.iterrows():
+                date_str = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
                 results.append({
-                    "date": idx.strftime("%Y-%m-%d"),
+                    "date": date_str,
                     "open": round(float(row["Open"]), 2),
                     "high": round(float(row["High"]), 2),
                     "low": round(float(row["Low"]), 2),
@@ -81,7 +139,7 @@ class StockAnalyzer:
                 })
             return results
         except Exception as e:
-            print(f"Error fetching historical data for {ticker}: {e}")
+            print(f"[ERROR] Fetching historical data for {ticker}: {type(e).__name__}: {e}")
             return None
 
     @staticmethod
@@ -179,9 +237,9 @@ class StockAnalyzer:
     def validate_ticker(query: str) -> dict | None:
         """Validate that a ticker symbol exists and return basic info."""
         try:
-            ticker = yf.Ticker(query.strip().upper())
-            info = ticker.info
-            if info and ("longName" in info or "shortName" in info):
+            stock = StockAnalyzer._get_ticker(query.strip().upper())
+            info = stock.info
+            if info and isinstance(info, dict) and ("longName" in info or "shortName" in info):
                 return {
                     "ticker": query.strip().upper(),
                     "name": info.get("longName") or info.get("shortName", query.strip().upper()),
