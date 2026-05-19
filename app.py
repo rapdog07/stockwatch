@@ -2,12 +2,13 @@
 Stock Analysis Web Application
 
 A Flask-based web app for looking up and analyzing stocks
-using Yahoo Finance data via yfinance.
+using Alpha Vantage (primary) or Yahoo Finance (fallback).
 """
 
+import os
 import sys
 from flask import Flask, render_template, request, jsonify
-from utils.stock_analyzer import StockAnalyzer
+from utils.stock_analyzer import StockAnalyzer, _has_av
 
 app = Flask(__name__)
 
@@ -38,60 +39,59 @@ def stock_detail(ticker: str):
 
 @app.route("/debug/<ticker>")
 def debug_ticker(ticker: str):
-    """Diagnostic endpoint: shows raw yfinance responses for a ticker."""
+    """Diagnostic endpoint: shows data source status and raw responses."""
     t = ticker.upper()
     result = {
         "ticker": t,
+        "alpha_vantage_configured": _has_av(),
         "steps": [],
     }
 
     # Step 1: Test raw connectivity
     try:
         import requests
-        r = requests.get("https://finance.yahoo.com", timeout=10, headers={
+        r = requests.get("https://www.alphavantage.co", timeout=10, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0"
         })
         result["steps"].append({
-            "step": "connectivity_check",
-            "ok": r.status_code == 200,
+            "step": "connectivity_alphavantage",
+            "ok": r.status_code in (200, 403),
             "status": r.status_code,
         })
     except Exception as e:
         result["steps"].append({
-            "step": "connectivity_check",
+            "step": "connectivity_alphavantage",
             "ok": False,
             "error": f"{type(e).__name__}: {e}",
         })
 
-    # Step 2: Try yf.download
+    # Step 2: Try full stock info
     try:
-        price_data = StockAnalyzer._get_price_from_download(t)
+        info = StockAnalyzer.get_stock_info(t)
         result["steps"].append({
-            "step": "yf_download_price",
-            "ok": price_data is not None,
-            "data": price_data,
+            "step": "stock_info",
+            "ok": info is not None,
+            "name": info["name"] if info else None,
+            "price": info["price"] if info else None,
         })
     except Exception as e:
         result["steps"].append({
-            "step": "yf_download_price",
+            "step": "stock_info",
             "ok": False,
             "error": f"{type(e).__name__}: {e}",
         })
 
-    # Step 3: Try Ticker.info
+    # Step 3: Try historical data
     try:
-        stock = StockAnalyzer._get_ticker(t)
-        info = stock.info
+        hist = StockAnalyzer.get_historical_data(t, period="1mo")
         result["steps"].append({
-            "step": "ticker_info",
-            "ok": bool(info),
-            "keys_found": list(info.keys())[:30] if info else [],
-            "longName": info.get("longName") if info else None,
-            "currentPrice": info.get("currentPrice") if info else None,
+            "step": "historical_data",
+            "ok": hist is not None,
+            "rows": len(hist) if hist else 0,
         })
     except Exception as e:
         result["steps"].append({
-            "step": "ticker_info",
+            "step": "historical_data",
             "ok": False,
             "error": f"{type(e).__name__}: {e}",
         })
