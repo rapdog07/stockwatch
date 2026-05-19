@@ -8,7 +8,7 @@ using Alpha Vantage (primary) or Yahoo Finance (fallback).
 import os
 import sys
 from flask import Flask, render_template, request, jsonify
-from utils.stock_analyzer import StockAnalyzer, _has_av
+from utils.stock_analyzer import StockAnalyzer, _has_av, _has_fh
 
 app = Flask(__name__)
 
@@ -29,9 +29,8 @@ def stock_detail(ticker: str):
             "index.html",
             error=(
                 f"Could not find stock data for '{ticker.upper()}'. "
-                f"This may be due to a temporary Yahoo Finance connectivity issue "
-                f"on the server. Try refreshing in a moment, or visit "
-                f"/debug/{ticker.upper()} to diagnose."
+                f"All data sources are currently unavailable. "
+                f"Visit /debug/{ticker.upper()} to diagnose."
             ),
         )
     return render_template("stock.html", analysis=analysis, period=period)
@@ -43,13 +42,32 @@ def debug_ticker(ticker: str):
     t = ticker.upper()
     result = {
         "ticker": t,
+        "finnhub_configured": _has_fh(),
         "alpha_vantage_configured": _has_av(),
         "steps": [],
     }
 
-    # Step 1: Test raw connectivity
+    # Step 1: Test Finnhub connectivity
     try:
         import requests
+        r = requests.get("https://finnhub.io/api/v1/quote", params={
+            "symbol": "AAPL", "token": os.environ.get("FINNHUB_API_KEY", "")
+        }, timeout=10)
+        result["steps"].append({
+            "step": "connectivity_finnhub",
+            "ok": r.status_code in (200, 403, 401),
+            "status": r.status_code,
+            "body_keys": list(r.json().keys()) if r.status_code == 200 else None,
+        })
+    except Exception as e:
+        result["steps"].append({
+            "step": "connectivity_finnhub",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+    # Step 2: Test Alpha Vantage connectivity
+    try:
         r = requests.get("https://www.alphavantage.co", timeout=10, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0"
         })
@@ -65,7 +83,7 @@ def debug_ticker(ticker: str):
             "error": f"{type(e).__name__}: {e}",
         })
 
-    # Step 2: Try full stock info
+    # Step 3: Try full stock info
     try:
         info = StockAnalyzer.get_stock_info(t)
         result["steps"].append({
@@ -81,7 +99,7 @@ def debug_ticker(ticker: str):
             "error": f"{type(e).__name__}: {e}",
         })
 
-    # Step 3: Try historical data
+    # Step 4: Try historical data
     try:
         hist = StockAnalyzer.get_historical_data(t, period="1mo")
         result["steps"].append({
@@ -96,7 +114,7 @@ def debug_ticker(ticker: str):
             "error": f"{type(e).__name__}: {e}",
         })
 
-    # Step 4: Try full analysis
+    # Step 5: Try full analysis
     try:
         analysis = StockAnalyzer.get_full_analysis(t)
         result["steps"].append({

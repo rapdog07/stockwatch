@@ -1,8 +1,8 @@
 """
 Stock Analysis Utility Module
 
-Fetches stock data from Alpha Vantage (primary) with Yahoo Finance
-fallback, and computes technical indicators and analytics.
+Fetches stock data from Finnhub (primary) → Alpha Vantage → Yahoo Finance
+fallback chain, and computes technical indicators and analytics.
 """
 
 import os
@@ -24,12 +24,120 @@ def _log(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Alpha Vantage API
+# Finnhub API (primary — 60 calls/min free tier)
+# ---------------------------------------------------------------------------
+
+_FH_API_KEY = os.environ.get("FINNHUB_API_KEY", "").strip()
+
+
+def _has_fh() -> bool:
+    """Whether Finnhub API key is configured."""
+    return bool(_FH_API_KEY)
+
+
+def _fh_request(path: str) -> dict | None:
+    """Make a request to Finnhub and return parsed JSON."""
+    url = f"https://finnhub.io/api/v1{path}"
+    try:
+        r = requests.get(url, params={"token": _FH_API_KEY}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and data.get("error"):
+            _log(f"[FH] API error: {data['error']}")
+            return None
+        return data
+    except Exception as e:
+        _log(f"[FH] Request failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _fh_get_quote(ticker: str) -> dict | None:
+    """Fetch current quote from Finnhub."""
+    if not _has_fh():
+        return None
+    _log(f"[FH] quote for {ticker}")
+    data = _fh_request(f"/quote?symbol={ticker}")
+    if not data:
+        return None
+    # Finnhub quote: {c, d, dp, h, l, o, pc, t}
+    price = data.get("c")
+    if price is None or price == 0:
+        return None
+    try:
+        prev_close = data.get("pc", price)
+        return {
+            "price": float(price),
+            "prev_close": float(prev_close) if prev_close else float(price),
+            "open": float(data.get("o", price)),
+            "day_high": float(data.get("h", price)),
+            "day_low": float(data.get("l", price)),
+            "volume": 0,  # Finnhub free quote doesn't include volume
+        }
+    except (ValueError, TypeError) as e:
+        _log(f"[FH] Parse error for {ticker}: {e}")
+        return None
+
+
+def _fh_get_profile(ticker: str) -> dict:
+    """Fetch company profile from Finnhub (limited metadata)."""
+    if not _has_fh():
+        return {}
+    _log(f"[FH] profile2 for {ticker}")
+    data = _fh_request(f"/stock/profile2?symbol={ticker}")
+    if not data or "name" not in data:
+        return {}
+    # Convert market cap from millions to actual
+    market_cap_m = data.get("marketCapitalization")
+    market_cap = float(market_cap_m) * 1_000_000 if market_cap_m else None
+    return {
+        "name": data.get("name", ticker.upper()),
+        "industry": data.get("finnhubIndustry", "N/A"),
+        "market_cap": market_cap,
+    }
+
+
+def _fh_get_candles(ticker: str, months: int = 12) -> list[dict] | None:
+    """Fetch daily candles from Finnhub."""
+    if not _has_fh():
+        return None
+    to_ts = int(datetime.now().timestamp())
+    from_ts = int((datetime.now() - timedelta(days=months * 32)).timestamp())
+    _log(f"[FH] candle for {ticker} ({months}mo)")
+    data = _fh_request(
+        f"/stock/candle?symbol={ticker}&resolution=D&from={from_ts}&to={to_ts}"
+    )
+    if not data or data.get("s") != "ok":
+        _log(f"[FH] No candle data for {ticker}: {data.get('s', 'no data')}")
+        return None
+    t_stamps = data.get("t", [])
+    opens = data.get("o", [])
+    highs = data.get("h", [])
+    lows = data.get("l", [])
+    closes = data.get("c", [])
+    volumes = data.get("v", [])
+    if not t_stamps or not closes:
+        return None
+
+    results = []
+    for i, ts in enumerate(t_stamps):
+        dt = datetime.utcfromtimestamp(ts)
+        results.append({
+            "date": dt.strftime("%Y-%m-%d"),
+            "open": round(float(opens[i]), 2),
+            "high": round(float(highs[i]), 2),
+            "low": round(float(lows[i]), 2),
+            "close": round(float(closes[i]), 2),
+            "volume": int(volumes[i]) if i < len(volumes) else 0,
+        })
+    _log(f"[FH] Got {len(results)} candle rows for {ticker}")
+    return results if results else None
+
+
+# ---------------------------------------------------------------------------
+# Alpha Vantage API (fallback — 25 calls/day free tier)
 # ---------------------------------------------------------------------------
 
 AV_BASE = "https://www.alphavantage.co/query"
-
-# Get API key from environment (set on Render dashboard)
 _AV_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
 
 
@@ -100,14 +208,12 @@ def _av_get_overview(ticker: str) -> dict:
         return {}
 
     def _s(key, default=None):
-        """Get a string value, treating 'None'/'N/A'/empty as missing."""
         val = data.get(key, default)
         if isinstance(val, str) and val.strip().lower() in ("none", "", "n/a"):
             return default
         return val
 
     def _num(key):
-        """Get a numeric value safely, returning None on failure."""
         val = _s(key)
         if val is None:
             return None
@@ -117,7 +223,6 @@ def _av_get_overview(ticker: str) -> dict:
             return None
 
     def _intnum(key):
-        """Get an integer value safely."""
         val = _s(key)
         if val is None:
             return 0
@@ -149,7 +254,6 @@ def _av_get_daily(ticker: str, months: int = 12) -> list[dict] | None:
     """Fetch daily historical data from Alpha Vantage TIME_SERIES_DAILY."""
     if not _has_av():
         return None
-    # full = up to 20 years of data; compact = 100 data points
     outputsize = "full" if months > 3 else "compact"
     _log(f"[AV] TIME_SERIES_DAILY for {ticker} outputsize={outputsize}")
     data = _av_request({"function": "TIME_SERIES_DAILY", "symbol": ticker, "outputsize": outputsize})
@@ -183,7 +287,7 @@ def _av_get_daily(ticker: str, months: int = 12) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
-# Yahoo Finance fallback (kept for when AV key isn't set or AV is rate-limited)
+# Yahoo Finance fallback (kept for when no API keys are set)
 # ---------------------------------------------------------------------------
 
 _yf_session = None
@@ -296,34 +400,52 @@ def _yf_get_historical(ticker: str, period: str = "1y") -> list[dict] | None:
 # ---------------------------------------------------------------------------
 
 class StockAnalyzer:
-    """Fetches stock data (Alpha Vantage primary, yfinance fallback)
+    """Fetches stock data (Finnhub → Alpha Vantage → Yahoo Finance)
     and computes technical indicators."""
 
     @staticmethod
     def get_stock_info(ticker: str) -> dict | None:
-        """Fetch basic stock info and key metrics."""
-        t = ticker.upper()
-        _log(f"[get_stock_info] {t} (AV={'yes' if _has_av() else 'no'})")
+        """Fetch basic stock info and key metrics.
 
-        # --- Price data ---
+        Fallback chain:
+          Price:  Finnhub → Alpha Vantage → Yahoo Finance
+          Meta:   Alpha Vantage → Yahoo Finance (+ Finnhub profile for name/industry)
+        """
+        t = ticker.upper()
+        fh = "yes" if _has_fh() else "no"
+        av = "yes" if _has_av() else "no"
+        _log(f"[get_stock_info] {t} (FH={fh}, AV={av})")
+
+        # --- Price data (Finnhub → AV → YF) ---
         price_data = None
-        if _has_av():
+        if _has_fh():
+            price_data = _fh_get_quote(t)
+        if not price_data and _has_av():
             price_data = _av_get_quote(t)
         if not price_data:
-            _log(f"[get_stock_info] AV quote failed, trying YF fallback")
+            _log(f"[get_stock_info] FH/AV quote failed, trying YF fallback")
             price_data = _yf_get_price(t)
         if not price_data:
             _log(f"[get_stock_info] FAIL: no price for {t}")
             return None
 
-        # --- Metadata ---
+        # --- Metadata (AV → YF, + FH profile for name/industry) ---
         meta = {}
+        fh_profile = _fh_get_profile(t) if _has_fh() else {}
         if _has_av():
             meta = _av_get_overview(t)
         if not meta.get("name"):
             yf_meta = _yf_get_info(t)
             if yf_meta:
                 meta = {**yf_meta, **meta}  # AV takes priority where present
+        # Fill in name from Finnhub if still missing
+        if not meta.get("name") and fh_profile.get("name"):
+            meta["name"] = fh_profile["name"]
+        if not meta.get("industry") or meta.get("industry") == "N/A":
+            if fh_profile.get("industry"):
+                meta["industry"] = fh_profile["industry"]
+        if meta.get("market_cap") is None and fh_profile.get("market_cap"):
+            meta["market_cap"] = fh_profile["market_cap"]
 
         price = price_data["price"]
         prev_close = price_data["prev_close"]
@@ -361,18 +483,29 @@ class StockAnalyzer:
 
     @staticmethod
     def get_historical_data(ticker: str, period: str = "1y") -> list[dict] | None:
-        """Fetch historical price data."""
+        """Fetch historical price data.
+
+        Fallback chain: Finnhub → Alpha Vantage → Yahoo Finance
+        """
         t = ticker.upper()
-        # Map period to approximate months for AV
         period_months = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12,
                          "2y": 24, "5y": 60}.get(period, 12)
 
+        # Try Finnhub first
+        if _has_fh():
+            data = _fh_get_candles(t, months=period_months)
+            if data:
+                return data
+            _log(f"[get_historical_data] FH failed for {t}, trying AV")
+
+        # Try Alpha Vantage
         if _has_av():
             data = _av_get_daily(t, months=period_months)
             if data:
                 return data
             _log(f"[get_historical_data] AV failed for {t}, trying YF")
 
+        # Fall back to Yahoo Finance
         return _yf_get_historical(t, period=period)
 
     # ---- Technical indicators (unchanged) ----
