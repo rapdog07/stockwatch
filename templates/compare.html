@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}StockWatch - Compare Stocks{% endblock %}
+
+{% block content %}
+<section class="compare-section">
+    <div class="compare-header">
+        <h1 class="page-title">Compare Stocks</h1>
+        <p class="page-subtitle">Enter comma-separated ticker symbols to compare side by side.</p>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-error">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="15" y1="9" x2="9" y2="15"></line>
+            <line x1="9" y1="9" x2="15" y2="15"></line>
+        </svg>
+        <span>{{ error }}</span>
+    </div>
+    {% endif %}
+
+    <form method="POST" class="compare-form">
+        <div class="compare-input-group">
+            <input type="text" name="tickers" class="compare-input"
+                   placeholder="e.g., AAPL, MSFT, GOOGL"
+                   value="{{ tickers_input or '' }}"
+                   autocomplete="off" autofocus>
+            <button type="submit" class="btn-primary">Compare</button>
+        </div>
+    </form>
+
+    {% if results %}
+    <div class="compare-results">
+        <h2 class="results-title">Comparison Results</h2>
+        <div class="compare-table-wrapper">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Name</th>
+                        <th>Price</th>
+                        <th>Change</th>
+                        <th>Market Cap</th>
+                        <th>P/E Ratio</th>
+                        <th>Volume</th>
+                        <th>Beta</th>
+                        <th>Div. Yield</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stock in results %}
+                    <tr>
+                        <td><a href="/stock/{{ stock.ticker }}" class="ticker-link"><strong>{{ stock.ticker }}</strong></a></td>
+                        <td class="text-muted">{{ stock.name }}</td>
+                        <td class="mono">${{ "%.2f" %(stock.price) }}</td>
+                        <td class="{% if stock.change_pct >= 0 %}positive{% else %}negative{% endif %} mono">
+                            {{ "%+.2f" %(stock.change_pct) }}%
+                        </td>
+                        <td class="mono">
+                            {% if stock.market_cap %}
+                                {% if stock.market_cap >= 1e12 %}${{ "%.2f" %(stock.market_cap / 1e12) }}T
+                                {% elif stock.market_cap >= 1e9 %}${{ "%.2f" %(stock.market_cap / 1e9) }}B
+                                {% else %}${{ "%.2f" %(stock.market_cap / 1e6) }}M{% endif %}
+                            {% else %}N/A{% endif %}
+                        </td>
+                        <td class="mono">{{ "%.2f" %(stock.pe_ratio) if stock.pe_ratio else 'N/A' }}</td>
+                        <td class="mono">
+                            {% if stock.volume >= 1e6 %}{{ "%.1f" %(stock.volume / 1e6) }}M
+                            {% elif stock.volume >= 1e3 %}{{ "%.1f" %(stock.volume / 1e3) }}K
+                            {% else %}{{ stock.volume }}{% endif %}
+                        </td>
+                        <td class="mono">{{ "%.2f" %(stock.beta) if stock.beta else 'N/A' }}</td>
+                        <td class="mono">{{ ("%.2f" %(stock.dividend_yield * 100) + '%') if stock.dividend_yield else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

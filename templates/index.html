@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}StockWatch - Stock Analysis{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <div class="hero-content">
+        <h1 class="hero-title">Analyze Any Stock</h1>
+        <p class="hero-subtitle">Real-time data, technical indicators, and powerful comparisons &mdash; all in one place.</p>
+
+        {% if error %}
+        <div class="alert alert-error">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="15" y1="9" x2="9" y2="15"></line>
+                <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form action="/stock/" method="GET" class="hero-search" onsubmit="this.action = '/stock/' + this.querySelector('input').value.trim().toUpperCase(); return this.querySelector('input').value.trim() !== '';">
+            <div class="search-wrapper">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" name="ticker" class="search-input" placeholder="Enter a ticker symbol (e.g., AAPL, MSFT, GOOGL)" autocomplete="off" autofocus>
+                <button type="submit" class="search-btn">Analyze</button>
+            </div>
+        </form>
+
+        <div class="popular-tickers">
+            <span class="popular-label">Popular:</span>
+            <a href="/stock/AAPL" class="ticker-chip">AAPL</a>
+            <a href="/stock/MSFT" class="ticker-chip">MSFT</a>
+            <a href="/stock/GOOGL" class="ticker-chip">GOOGL</a>
+            <a href="/stock/AMZN" class="ticker-chip">AMZN</a>
+            <a href="/stock/NVDA" class="ticker-chip">NVDA</a>
+            <a href="/stock/META" class="ticker-chip">META</a>
+            <a href="/stock/TSLA" class="ticker-chip">TSLA</a>
+            <a href="/stock/SPY" class="ticker-chip">SPY</a>
+        </div>
+    </div>
+</section>
+
+<section class="features">
+    <div class="features-grid">
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+            </div>
+            <h3>Real-Time Quotes</h3>
+            <p>Live price data, volume, market cap, and key financial metrics at your fingertips.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="20" x2="12" y2="10"></line>
+                    <line x1="18" y1="20" x2="18" y2="4"></line>
+                    <line x1="6" y1="20" x2="6" y2="16"></line>
+                </svg>
+            </div>
+            <h3>Technical Indicators</h3>
+            <p>SMA, EMA, RSI, MACD, and Bollinger Bands with interactive, zoomable charts.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+            </div>
+            <h3>Side-by-Side Compare</h3>
+            <p>Compare multiple stocks head-to-head on price, P/E, beta, yield, and more.</p>
+        </div>
+    </div>
+</section>
+{% endblock %}

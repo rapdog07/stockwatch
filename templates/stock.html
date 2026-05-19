@@ -1,0 +1,440 @@
+{% extends "base.html" %}
+{% block title %}{{ analysis.info.ticker }} - {{ analysis.info.name }} - StockWatch{% endblock %}
+
+{% block head_extra %}
+<meta property="og:title" content="{{ analysis.info.ticker }} - {{ analysis.info.name }} | StockWatch">
+<meta property="og:description" content="{{ analysis.info.price }} | {{ '%+.2f' %(analysis.info.change_pct) }}% today">
+{% endblock %}
+
+{% block content %}
+<div class="stock-page">
+    <!-- Stock Header -->
+    <div class="stock-header">
+        <div class="stock-header-left">
+            <h1 class="stock-ticker">{{ analysis.info.ticker }}</h1>
+            <p class="stock-name">{{ analysis.info.name }}</p>
+            <p class="stock-sector">{{ analysis.info.sector }} &bull; {{ analysis.info.industry }}</p>
+        </div>
+        <div class="stock-header-right">
+            <p class="stock-price">${{ "%.2f" %(analysis.info.price) }}</p>
+            <p class="stock-change {% if analysis.info.change >= 0 %}positive{% else %}negative{% endif %}">
+                {{ "%+.2f" %(analysis.info.change) }} ({{ "%+.2f" %(analysis.info.change_pct) }}%)
+            </p>
+        </div>
+    </div>
+
+    <!-- Period Selector -->
+    <div class="period-selector">
+        {% set periods = [('1mo', '1M'), ('3mo', '3M'), ('6mo', '6M'), ('1y', '1Y'), ('2y', '2Y'), ('5y', '5Y')] %}
+        {% for p_val, p_label in periods %}
+        <a href="/stock/{{ analysis.info.ticker }}?period={{ p_val }}"
+           class="period-btn {% if period == p_val %}active{% endif %}">{{ p_label }}</a>
+        {% endfor %}
+    </div>
+
+    <!-- Price Chart -->
+    <div class="chart-section">
+        <h2 class="section-title">Price Chart</h2>
+        <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Key Metrics Grid -->
+    <div class="metrics-section">
+        <h2 class="section-title">Key Metrics</h2>
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <span class="metric-label">Open</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.open) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Previous Close</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.prev_close) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Day High</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.day_high) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Day Low</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.day_low) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Volume</span>
+                <span class="metric-value">{{ "{:,}".format(analysis.info.volume) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Avg Volume</span>
+                <span class="metric-value">{{ "{:,}".format(analysis.info.avg_volume) }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Market Cap</span>
+                <span class="metric-value">
+                    {% if analysis.info.market_cap %}
+                        {% if analysis.info.market_cap >= 1e12 %}${{ "%.2f" %(analysis.info.market_cap / 1e12) }}T
+                        {% elif analysis.info.market_cap >= 1e9 %}${{ "%.2f" %(analysis.info.market_cap / 1e9) }}B
+                        {% else %}${{ "%.2f" %(analysis.info.market_cap / 1e6) }}M{% endif %}
+                    {% else %}N/A{% endif %}
+                </span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">P/E Ratio</span>
+                <span class="metric-value">{{ "%.2f" %(analysis.info.pe_ratio) if analysis.info.pe_ratio else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">EPS</span>
+                <span class="metric-value">{{ "%.2f" %(analysis.info.eps) if analysis.info.eps else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Beta</span>
+                <span class="metric-value">{{ "%.2f" %(analysis.info.beta) if analysis.info.beta else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Div. Yield</span>
+                <span class="metric-value">{{ ("%.2f" %(analysis.info.dividend_yield * 100) + '%') if analysis.info.dividend_yield else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">52-Week High</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.fifty_two_week_high) if analysis.info.fifty_two_week_high else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">52-Week Low</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.fifty_two_week_low) if analysis.info.fifty_two_week_low else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">50-Day MA</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.fifty_day_ma) if analysis.info.fifty_day_ma else 'N/A' }}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">200-Day MA</span>
+                <span class="metric-value">${{ "%.2f" %(analysis.info.two_hundred_day_ma) if analysis.info.two_hundred_day_ma else 'N/A' }}</span>
+            </div>
+        </div>
+    </div>
+
+    {% if analysis.indicators %}
+    <!-- Technical Indicators Charts -->
+    <div class="chart-section">
+        <h2 class="section-title">RSI (Relative Strength Index)</h2>
+        <div class="chart-container chart-container-sm">
+            <canvas id="rsiChart"></canvas>
+        </div>
+    </div>
+
+    <div class="chart-section">
+        <h2 class="section-title">MACD</h2>
+        <div class="chart-container chart-container-sm">
+            <canvas id="macdChart"></canvas>
+        </div>
+    </div>
+
+    <div class="chart-section">
+        <h2 class="section-title">Bollinger Bands (20-day, 2σ)</h2>
+        <div class="chart-container">
+            <canvas id="bollingerChart"></canvas>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if analysis.info.description %}
+    <div class="about-section">
+        <h2 class="section-title">About {{ analysis.info.name }}</h2>
+        <p class="about-text">{{ analysis.info.description }}</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+    {% if analysis.historical %}
+    // Price Chart
+    (function() {
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        const dates = {{ analysis.dates | tojson }};
+        const prices = {{ analysis.historical | map(attribute='close') | list | tojson }};
+        const volumes = {{ analysis.historical | map(attribute='volume') | list | tojson }};
+        const change = {{ analysis.info.change }};
+
+        // Moving Averages
+        const sma20 = {{ analysis.indicators.sma_20 | tojson }};
+        const sma50 = {{ analysis.indicators.sma_50 | tojson }};
+        const sma200 = {{ analysis.indicators.sma_200 | tojson }};
+
+        const datasets = [{
+            label: 'Close Price',
+            data: prices,
+            borderColor: change >= 0 ? '#10b981' : '#ef4444',
+            backgroundColor: (change >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'),
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 2,
+            order: 1
+        }];
+
+        if (sma20 && sma20.some(v => v !== null)) {
+            datasets.push({
+                label: 'SMA 20',
+                data: sma20,
+                borderColor: '#f59e0b',
+                borderWidth: 1,
+                tension: 0.3,
+                pointRadius: 0,
+                fill: false,
+                order: 2
+            });
+        }
+        if (sma50 && sma50.some(v => v !== null)) {
+            datasets.push({
+                label: 'SMA 50',
+                data: sma50,
+                borderColor: '#3b82f6',
+                borderWidth: 1,
+                tension: 0.3,
+                pointRadius: 0,
+                fill: false,
+                order: 2
+            });
+        }
+        if (sma200 && sma200.some(v => v !== null)) {
+            datasets.push({
+                label: 'SMA 200',
+                data: sma200,
+                borderColor: '#8b5cf6',
+                borderWidth: 1,
+                tension: 0.3,
+                pointRadius: 0,
+                fill: false,
+                order: 2
+            });
+        }
+
+        new Chart(ctx, {
+            type: 'line',
+            data: { labels: dates, datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const v = ctx.raw;
+                                if (v === null) return '';
+                                return ctx.dataset.label + ': $' + v.toFixed(2);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', maxTicksLimit: 12 }
+                    },
+                    y: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', callback: v => '$' + v.toFixed(2) }
+                    }
+                }
+            }
+        });
+    })();
+
+    // RSI Chart
+    (function() {
+        const ctx = document.getElementById('rsiChart').getContext('2d');
+        const dates = {{ analysis.dates | tojson }};
+        const rsi = {{ analysis.indicators.rsi | tojson }};
+
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dates,
+                datasets: [
+                    {
+                        label: 'RSI',
+                        data: rsi,
+                        borderColor: '#8b5cf6',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Overbought (70)',
+                        data: Array(dates.length).fill(70),
+                        borderColor: 'rgba(239,68,68,0.4)',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Oversold (30)',
+                        data: Array(dates.length).fill(30),
+                        borderColor: 'rgba(16,185,129,0.4)',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        fill: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', maxTicksLimit: 12 }
+                    },
+                    y: {
+                        min: 0, max: 100,
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8' }
+                    }
+                }
+            }
+        });
+    })();
+
+    // MACD Chart
+    (function() {
+        const ctx = document.getElementById('macdChart').getContext('2d');
+        const dates = {{ analysis.dates | tojson }};
+        const macd = {{ analysis.indicators.macd.macd | tojson }};
+        const signal = {{ analysis.indicators.macd.signal | tojson }};
+        const histogram = {{ analysis.indicators.macd.histogram | tojson }};
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: dates,
+                datasets: [
+                    {
+                        label: 'Histogram',
+                        data: histogram,
+                        backgroundColor: histogram.map(v => v !== null && v >= 0 ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)'),
+                        borderWidth: 0,
+                        order: 1
+                    },
+                    {
+                        label: 'MACD',
+                        data: macd,
+                        borderColor: '#3b82f6',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false,
+                        type: 'line',
+                        order: 0
+                    },
+                    {
+                        label: 'Signal',
+                        data: signal,
+                        borderColor: '#f59e0b',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false,
+                        type: 'line',
+                        order: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', maxTicksLimit: 12 }
+                    },
+                    y: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8' }
+                    }
+                }
+            }
+        });
+    })();
+
+    // Bollinger Bands
+    (function() {
+        const ctx = document.getElementById('bollingerChart').getContext('2d');
+        const dates = {{ analysis.dates | tojson }};
+        const prices = {{ analysis.historical | map(attribute='close') | list | tojson }};
+        const bbUpper = {{ analysis.indicators.bollinger.upper | tojson }};
+        const bbLower = {{ analysis.indicators.bollinger.lower | tojson }};
+        const bbSma = {{ analysis.indicators.bollinger.sma | tojson }};
+
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dates,
+                datasets: [
+                    {
+                        label: 'Upper Band',
+                        data: bbUpper,
+                        borderColor: 'rgba(100,116,139,0.5)',
+                        borderWidth: 1,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Close Price',
+                        data: prices,
+                        borderColor: '#3b82f6',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'SMA 20',
+                        data: bbSma,
+                        borderColor: '#f59e0b',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Lower Band',
+                        data: bbLower,
+                        borderColor: 'rgba(100,116,139,0.5)',
+                        borderWidth: 1,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        fill: { target: 0, above: 'rgba(100,116,139,0.1)' }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', maxTicksLimit: 12 }
+                    },
+                    y: {
+                        grid: { color: 'rgba(100,116,139,0.12)' },
+                        ticks: { color: '#94a3b8', callback: v => '$' + v.toFixed(2) }
+                    }
+                }
+            }
+        });
+    })();
+
+    {% endif %}
+</script>
+{% endblock %}
