@@ -6,6 +6,7 @@ technical indicators and analytics.
 """
 
 import sys
+import random
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -13,10 +14,41 @@ import requests
 import time
 from datetime import datetime, timedelta
 
+# Retry configuration
+MAX_RETRIES = 3
+BASE_DELAY = 2.0  # seconds
+
 
 def _log(msg: str) -> None:
     """Log to stderr so Render captures it in the deploy logs."""
     print(msg, file=sys.stderr, flush=True)
+
+
+def _retry_with_backoff(fn, name: str, ticker: str):
+    """Call fn() with exponential backoff if rate-limited."""
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            result = fn()
+            if attempt > 0:
+                _log(f"[retry] {name} {ticker} succeeded on attempt {attempt + 1}")
+            return result
+        except Exception as e:
+            last_error = e
+            err_name = type(e).__name__
+            # Retry on rate limits or connection errors
+            retryable = (
+                "rate" in err_name.lower()
+                or "timeout" in err_name.lower()
+                or "connection" in err_name.lower()
+                or "Too Many Requests" in str(e)
+            )
+            if not retryable or attempt == MAX_RETRIES - 1:
+                _log(f"[{name}] FAILED for {ticker}: {err_name}: {e}")
+                raise
+            delay = BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+            _log(f"[{name}] {ticker} rate-limited, retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
+            time.sleep(delay)
 
 
 def _get_yf_session():
@@ -59,8 +91,9 @@ class StockAnalyzer:
     def _get_price_from_download(ticker: str) -> dict | None:
         """Get latest price data from yf.download (uses different, more
         cloud-friendly Yahoo endpoint than Ticker.info)."""
-        try:
-            _log(f"[_get_price_from_download] Attempting yf.download for {ticker}")
+        _log(f"[_get_price_from_download] Attempting yf.download for {ticker}")
+
+        def _do_download():
             df = yf.download(
                 ticker,
                 period="5d",
@@ -91,8 +124,10 @@ class StockAnalyzer:
                 "day_low": low,
                 "volume": volume,
             }
-        except Exception as e:
-            _log(f"[_get_price_from_download] ERROR for {ticker}: {type(e).__name__}: {e}")
+
+        try:
+            return _retry_with_backoff(_do_download, "yf.download", ticker)
+        except Exception:
             return None
 
     @staticmethod
@@ -189,7 +224,8 @@ class StockAnalyzer:
     def get_historical_data(ticker: str, period: str = "1y", interval: str = "1d") -> list[dict] | None:
         """Fetch historical price data using yf.download (more reliable on cloud)."""
         _log(f"[get_historical_data] Fetching {ticker} period={period}")
-        try:
+
+        def _do_download():
             df = yf.download(
                 ticker,
                 period=period,
@@ -216,8 +252,10 @@ class StockAnalyzer:
                 })
             _log(f"[get_historical_data] Got {len(results)} rows for {ticker}")
             return results
-        except Exception as e:
-            _log(f"[get_historical_data] ERROR for {ticker}: {type(e).__name__}: {e}")
+
+        try:
+            return _retry_with_backoff(_do_download, "get_historical_data", ticker)
+        except Exception:
             return None
 
     @staticmethod
