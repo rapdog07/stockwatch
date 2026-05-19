@@ -5,6 +5,7 @@ A Flask-based web app for looking up and analyzing stocks
 using Yahoo Finance data via yfinance.
 """
 
+import sys
 from flask import Flask, render_template, request, jsonify
 from utils.stock_analyzer import StockAnalyzer
 
@@ -23,8 +24,93 @@ def stock_detail(ticker: str):
     period = request.args.get("period", "1y")
     analysis = StockAnalyzer.get_full_analysis(ticker.upper(), period=period)
     if not analysis:
-        return render_template("index.html", error=f"Could not find stock data for '{ticker.upper()}'. Please check the ticker symbol and try again.")
+        return render_template(
+            "index.html",
+            error=(
+                f"Could not find stock data for '{ticker.upper()}'. "
+                f"This may be due to a temporary Yahoo Finance connectivity issue "
+                f"on the server. Try refreshing in a moment, or visit "
+                f"/debug/{ticker.upper()} to diagnose."
+            ),
+        )
     return render_template("stock.html", analysis=analysis, period=period)
+
+
+@app.route("/debug/<ticker>")
+def debug_ticker(ticker: str):
+    """Diagnostic endpoint: shows raw yfinance responses for a ticker."""
+    t = ticker.upper()
+    result = {
+        "ticker": t,
+        "steps": [],
+    }
+
+    # Step 1: Test raw connectivity
+    try:
+        import requests
+        r = requests.get("https://finance.yahoo.com", timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0"
+        })
+        result["steps"].append({
+            "step": "connectivity_check",
+            "ok": r.status_code == 200,
+            "status": r.status_code,
+        })
+    except Exception as e:
+        result["steps"].append({
+            "step": "connectivity_check",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+    # Step 2: Try yf.download
+    try:
+        price_data = StockAnalyzer._get_price_from_download(t)
+        result["steps"].append({
+            "step": "yf_download_price",
+            "ok": price_data is not None,
+            "data": price_data,
+        })
+    except Exception as e:
+        result["steps"].append({
+            "step": "yf_download_price",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+    # Step 3: Try Ticker.info
+    try:
+        stock = StockAnalyzer._get_ticker(t)
+        info = stock.info
+        result["steps"].append({
+            "step": "ticker_info",
+            "ok": bool(info),
+            "keys_found": list(info.keys())[:30] if info else [],
+            "longName": info.get("longName") if info else None,
+            "currentPrice": info.get("currentPrice") if info else None,
+        })
+    except Exception as e:
+        result["steps"].append({
+            "step": "ticker_info",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+    # Step 4: Try full analysis
+    try:
+        analysis = StockAnalyzer.get_full_analysis(t)
+        result["steps"].append({
+            "step": "full_analysis",
+            "ok": analysis is not None,
+        })
+    except Exception as e:
+        result["steps"].append({
+            "step": "full_analysis",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+    return jsonify(result)
 
 
 @app.route("/api/stock/<ticker>")

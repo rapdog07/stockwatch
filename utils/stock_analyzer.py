@@ -5,12 +5,18 @@ Handles fetching stock data from Yahoo Finance and computing
 technical indicators and analytics.
 """
 
+import sys
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import requests
 import time
 from datetime import datetime, timedelta
+
+
+def _log(msg: str) -> None:
+    """Log to stderr so Render captures it in the deploy logs."""
+    print(msg, file=sys.stderr, flush=True)
 
 
 def _get_yf_session():
@@ -26,8 +32,16 @@ def _get_yf_session():
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
     })
     return session
+
+
+def _ensure_session():
+    """Ensure the shared session exists and return it."""
+    if StockAnalyzer._session is None:
+        StockAnalyzer._session = _get_yf_session()
+    return StockAnalyzer._session
 
 
 class StockAnalyzer:
@@ -39,91 +53,154 @@ class StockAnalyzer:
     @classmethod
     def _get_ticker(cls, ticker: str) -> yf.Ticker:
         """Get a yfinance Ticker with our custom session."""
-        if cls._session is None:
-            cls._session = _get_yf_session()
-        return yf.Ticker(ticker, session=cls._session)
+        return yf.Ticker(ticker, session=_ensure_session())
+
+    @staticmethod
+    def _get_price_from_download(ticker: str) -> dict | None:
+        """Get latest price data from yf.download (uses different, more
+        cloud-friendly Yahoo endpoint than Ticker.info)."""
+        try:
+            _log(f"[_get_price_from_download] Attempting yf.download for {ticker}")
+            df = yf.download(
+                ticker,
+                period="5d",
+                progress=False,
+                auto_adjust=False,
+                session=_ensure_session(),
+            )
+            if df is None or df.empty:
+                _log(f"[_get_price_from_download] Empty DataFrame for {ticker}")
+                return None
+
+            latest = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) > 1 else latest
+
+            price = float(latest["Close"])
+            prev_close = float(prev["Close"])
+            open_price = float(latest["Open"])
+            high = float(latest["High"])
+            low = float(latest["Low"])
+            volume = int(latest["Volume"])
+
+            _log(f"[_get_price_from_download] {ticker}: price={price}, prev_close={prev_close}")
+            return {
+                "price": price,
+                "prev_close": prev_close,
+                "open": open_price,
+                "day_high": high,
+                "day_low": low,
+                "volume": volume,
+            }
+        except Exception as e:
+            _log(f"[_get_price_from_download] ERROR for {ticker}: {type(e).__name__}: {e}")
+            return None
 
     @staticmethod
     def get_stock_info(ticker: str) -> dict | None:
-        """Fetch basic stock info and key metrics."""
+        """Fetch basic stock info and key metrics.
+
+        Uses yf.download for price data (more reliable on cloud) and
+        Ticker.info for metadata (name, sector, etc.)."""
+        _log(f"[get_stock_info] Starting for {ticker}")
+
+        # --- Step 1: Get price data from yf.download (primary) ---
+        price_data = StockAnalyzer._get_price_from_download(ticker)
+        if not price_data:
+            _log(f"[get_stock_info] yf.download failed for {ticker}, falling back to Ticker.info")
+
+        # --- Step 2: Get metadata from Ticker.info ---
+        info = {}
         try:
             stock = StockAnalyzer._get_ticker(ticker)
             info = stock.info
+            _log(f"[get_stock_info] Ticker.info returned {len(info)} keys for {ticker}")
+        except Exception as e:
+            _log(f"[get_stock_info] Ticker.info failed for {ticker}: {type(e).__name__}: {e}")
 
-            if not info or not isinstance(info, dict):
-                print(f"[WARN] Empty or invalid info dict for {ticker}")
-                return None
+        if not isinstance(info, dict):
+            info = {}
 
-            # Try multiple price keys — some work via different endpoints
+        # --- Step 3: Determine price ---
+        if price_data:
+            price = price_data["price"]
+            prev_close = price_data["prev_close"]
+            open_price = price_data["open"]
+            day_high = price_data["day_high"]
+            day_low = price_data["day_low"]
+            volume = price_data["volume"]
+        else:
+            # Fallback to info dict
             price = (
                 info.get("currentPrice")
                 or info.get("regularMarketPrice")
                 or info.get("regularMarketOpen")
+                or 0
             )
-            if not price or price == 0:
-                # Fallback: try to get price from fast_info (more reliable)
+            if price == 0:
                 try:
-                    price = stock.fast_info.get("lastPrice") or stock.fast_info.get("regularMarketPreviousClose")
+                    price = stock.fast_info.get("lastPrice", 0) if stock else 0
                 except Exception:
                     pass
-
-            if not price or price == 0:
-                print(f"[WARN] No price found for {ticker}. Info keys: {list(info.keys())[:20]}")
-                return None
-
             prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose") or price
-            change = price - prev_close
-            change_pct = (change / prev_close * 100) if prev_close else 0
+            open_price = info.get("regularMarketOpen", 0)
+            day_high = info.get("dayHigh", 0)
+            day_low = info.get("dayLow", 0)
+            volume = info.get("volume", 0)
 
-            return {
-                "ticker": ticker.upper(),
-                "name": info.get("longName") or info.get("shortName", ticker.upper()),
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "change_pct": round(change_pct, 2),
-                "prev_close": round(prev_close, 2),
-                "open": round(info.get("regularMarketOpen", 0), 2),
-                "day_high": round(info.get("dayHigh", 0), 2),
-                "day_low": round(info.get("dayLow", 0), 2),
-                "volume": info.get("volume", 0),
-                "avg_volume": info.get("averageVolume", 0),
-                "market_cap": info.get("marketCap"),
-                "pe_ratio": info.get("trailingPE"),
-                "forward_pe": info.get("forwardPE"),
-                "eps": info.get("trailingEps"),
-                "dividend_yield": info.get("dividendYield"),
-                "beta": info.get("beta"),
-                "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-                "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-                "fifty_day_ma": info.get("fiftyDayAverage"),
-                "two_hundred_day_ma": info.get("twoHundredDayAverage"),
-                "sector": info.get("sector", "N/A"),
-                "industry": info.get("industry", "N/A"),
-                "description": info.get("longBusinessSummary", ""),
-            }
-        except Exception as e:
-            print(f"[ERROR] Fetching stock info for {ticker}: {type(e).__name__}: {e}")
+        if not price or price == 0:
+            _log(f"[get_stock_info] FAIL: No price for {ticker}. info keys: {list(info.keys())[:15]}")
             return None
+
+        change = price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0
+
+        ticker_name = info.get("longName") or info.get("shortName") or ticker.upper()
+
+        _log(f"[get_stock_info] SUCCESS: {ticker} = ${price} ({ticker_name})")
+
+        return {
+            "ticker": ticker.upper(),
+            "name": ticker_name,
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "prev_close": round(prev_close, 2),
+            "open": round(open_price, 2),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "volume": int(volume),
+            "avg_volume": info.get("averageVolume", 0),
+            "market_cap": info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "eps": info.get("trailingEps"),
+            "dividend_yield": info.get("dividendYield"),
+            "beta": info.get("beta"),
+            "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+            "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+            "fifty_day_ma": info.get("fiftyDayAverage"),
+            "two_hundred_day_ma": info.get("twoHundredDayAverage"),
+            "sector": info.get("sector", "N/A"),
+            "industry": info.get("industry", "N/A"),
+            "description": info.get("longBusinessSummary", ""),
+        }
 
     @staticmethod
     def get_historical_data(ticker: str, period: str = "1y", interval: str = "1d") -> list[dict] | None:
         """Fetch historical price data using yf.download (more reliable on cloud)."""
+        _log(f"[get_historical_data] Fetching {ticker} period={period}")
         try:
-            # Ensure the session is initialized with browser headers
-            StockAnalyzer._get_ticker(ticker)
-            # Use yf.download — it hits a different Yahoo endpoint that's
-            # more reliable behind proxies / cloud hosting
             df = yf.download(
                 ticker,
                 period=period,
                 interval=interval,
                 progress=False,
                 auto_adjust=True,
-                session=StockAnalyzer._session,
+                session=_ensure_session(),
             )
 
             if df is None or df.empty:
-                print(f"[WARN] No historical data for {ticker} (period={period})")
+                _log(f"[get_historical_data] Empty data for {ticker}")
                 return None
 
             results = []
@@ -137,9 +214,10 @@ class StockAnalyzer:
                     "close": round(float(row["Close"]), 2),
                     "volume": int(row["Volume"]),
                 })
+            _log(f"[get_historical_data] Got {len(results)} rows for {ticker}")
             return results
         except Exception as e:
-            print(f"[ERROR] Fetching historical data for {ticker}: {type(e).__name__}: {e}")
+            _log(f"[get_historical_data] ERROR for {ticker}: {type(e).__name__}: {e}")
             return None
 
     @staticmethod
